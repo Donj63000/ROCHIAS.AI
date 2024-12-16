@@ -1,0 +1,10 @@
+pip install tensorflow
+pip install keras
+pip install pillow
+pip install matplotlib
+pip install scikit-learn
+pip install openai
+pip install reportlab
+pip install numpy
+
+Interpréteur Python 3.12 ou 3.13
