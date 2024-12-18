@@ -1,1 +1,314 @@
+import os
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")  # Pour ne pas afficher directement les fenêtres matplotlib
+import matplotlib.pyplot as plt
+from tensorflow.keras.models import load_model
+from tensorflow.keras.utils import plot_model  # Peut nécessiter pydot et graphviz
+
+# Thème plus professionnel (fond clair, textes sombres)
+THEME = {
+    'bg_main': '#F0F0F0',
+    'bg_section': '#E8E8E8',
+    'fg_text': '#000000',
+    'highlight': '#C0C0C0',
+    'button_bg': '#D0D0D0',
+    'button_fg': '#000000',
+    'accent': '#2F4F4F',
+    'accent2': '#4682B4',
+    'title_font': ("Helvetica", 16, "bold"),
+    'label_font': ("Helvetica", 12),
+    'entry_font': ("Helvetica", 12),
+    'text_bg': '#FFFFFF'
+}
+
+
+def create_thematic_frame(parent, title=None, theme=THEME):
+    if title:
+        frame = tk.LabelFrame(parent, text=title, bg=theme['bg_section'], fg=theme['fg_text'], font=theme['title_font'])
+    else:
+        frame = tk.Frame(parent, bg=theme['bg_section'])
+    return frame
+
+
+class ModelInspectorApp(tk.Frame):
+    def __init__(self, parent):
+        super().__init__(parent, bg=THEME['bg_main'])
+        self.parent = parent
+        self.model = None
+        self.loaded_model_path = None
+
+        self.model_name_label_var = tk.StringVar(value="Aucun modèle chargé")
+
+        self.setup_ui()
+
+    def setup_ui(self):
+        # Cadre pour le chargement du modèle
+        load_frame = create_thematic_frame(self, "Charger un Modèle")
+        load_frame.pack(padx=10, pady=10, fill='x')
+
+        tk.Label(load_frame, text="Sélectionnez un fichier .h5 :", bg=THEME['bg_section'], fg=THEME['fg_text'], font=THEME['label_font']).pack(side='left', padx=5, pady=5)
+
+        tk.Button(load_frame, text="Parcourir...", bg=THEME['button_bg'], fg=THEME['button_fg'],
+                  command=self.browse_model).pack(side='left', padx=5, pady=5)
+
+        self.model_path_var = tk.StringVar()
+        path_entry = tk.Entry(load_frame, textvariable=self.model_path_var, width=60,
+                              bg=THEME['text_bg'], fg=THEME['fg_text'], font=THEME['entry_font'])
+        path_entry.pack(side='left', padx=5, pady=5)
+
+        tk.Button(load_frame, text="Charger le Modèle", bg=THEME['accent'], fg='white', font=THEME['label_font'],
+                  command=self.load_model_action).pack(side='left', padx=5, pady=5)
+
+        # Barre de progression
+        self.progress = ttk.Progressbar(load_frame, orient='horizontal', mode='indeterminate')
+        self.progress.pack(side='left', padx=5, pady=5)
+
+        # Cadre des informations sur le modèle (grand cadre)
+        info_frame = create_thematic_frame(self, "Informations sur le Modèle")
+        info_frame.pack(padx=10, pady=10, fill='both', expand=True)
+
+        # Zone de texte élargie pour le résumé et les infos
+        # On utilise une police un peu plus grande
+        self.text_output = tk.Text(info_frame, bg=THEME['text_bg'], fg=THEME['fg_text'], wrap='none',
+                                   font=("Consolas", 12), width=120, height=30)
+        self.text_output.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # On ajoute une scrollbar verticale pour la zone de texte
+        y_scroll = ttk.Scrollbar(info_frame, orient="vertical", command=self.text_output.yview)
+        self.text_output.configure(yscrollcommand=y_scroll.set)
+        y_scroll.pack(side='right', fill='y')
+
+        # Cadre pour les actions d'analyse
+        action_frame = create_thematic_frame(self, "Actions d'Analyse")
+        action_frame.pack(padx=10, pady=10, fill='x')
+
+        btn_params = {'bg': THEME['button_bg'], 'fg': THEME['button_fg'], 'font': THEME['label_font']}
+
+        tk.Button(action_frame, text="Afficher Résumé du Modèle", **btn_params,
+                  command=self.show_model_summary).pack(side='left', padx=5, pady=5)
+
+        tk.Button(action_frame, text="Lister Couches & Paramètres", **btn_params,
+                  command=self.list_layers_and_params).pack(side='left', padx=5, pady=5)
+
+        tk.Button(action_frame, text="Visualiser Distribution des Poids", **btn_params,
+                  command=self.visualize_weights_distribution).pack(side='left', padx=5, pady=5)
+
+        tk.Button(action_frame, text="Afficher Poids Couches", **btn_params,
+                  command=self.show_layer_weights).pack(side='left', padx=5, pady=5)
+
+        tk.Button(action_frame, text="Sauvegarder le Résumé", **btn_params,
+                  command=self.save_summary_to_file).pack(side='left', padx=5, pady=5)
+
+        tk.Button(action_frame, text="Montrer Infos Compilation", **btn_params,
+                  command=self.show_compile_info).pack(side='left', padx=5, pady=5)
+
+        tk.Button(action_frame, text="Afficher l'Architecture (Image)", **btn_params,
+                  command=self.show_model_plot).pack(side='left', padx=5, pady=5)
+
+        # Cadre info modèle chargé
+        model_info_frame = create_thematic_frame(self, "Modèle Actuellement Chargé")
+        model_info_frame.pack(padx=10, pady=5, fill='x')
+
+        tk.Label(model_info_frame, textvariable=self.model_name_label_var, bg=THEME['bg_section'], fg=THEME['fg_text'],
+                 font=THEME['label_font']).pack(padx=5, pady=5)
+
+
+    def browse_model(self):
+        path = filedialog.askopenfilename(title="Sélectionnez un modèle (.h5)", filetypes=[("Modèle Keras", "*.h5")])
+        if path:
+            self.model_path_var.set(path)
+
+    def load_model_action(self):
+        path = self.model_path_var.get().strip()
+        if not path or not os.path.exists(path):
+            messagebox.showerror("Erreur", "Chemin du modèle invalide.")
+            return
+        self.progress.start()
+        self.after(100, self._load_model_thread, path)
+
+    def _load_model_thread(self, path):
+        try:
+            # On charge le modèle
+            self.model = load_model(path)
+            self.loaded_model_path = path
+            base_name = os.path.basename(path)
+            self.model_name_label_var.set(f"Modèle chargé : {base_name}")
+            messagebox.showinfo("Succès", f"Modèle chargé depuis : {path}")
+            self.text_output.delete('1.0', tk.END)
+            self.text_output.insert('end', f"Modèle chargé depuis {path}\n")
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Impossible de charger le modèle:\n{e}")
+        finally:
+            self.progress.stop()
+
+    def ensure_model_loaded(self):
+        if self.model is None:
+            messagebox.showerror("Erreur", "Aucun modèle chargé.")
+            return False
+        return True
+
+    def show_model_summary(self):
+        if not self.ensure_model_loaded():
+            return
+        summary_str = []
+        self.model.summary(print_fn=lambda x: summary_str.append(x))
+        summary_text = "\n".join(summary_str)
+        self.text_output.delete('1.0', tk.END)
+        self.text_output.insert('end', "===== Résumé du Modèle =====\n")
+        self.text_output.insert('end', summary_text + "\n")
+
+    def list_layers_and_params(self):
+        if not self.ensure_model_loaded():
+            return
+        layers_info = []
+        total_params = 0
+        self.text_output.delete('1.0', tk.END)
+        self.text_output.insert('end', "===== Liste des Couches & Paramètres =====\n")
+        for i, layer in enumerate(self.model.layers):
+            layer_params = layer.count_params()
+            total_params += layer_params
+            input_shape = layer.input_shape if hasattr(layer, 'input_shape') else None
+            output_shape = layer.output_shape if hasattr(layer, 'output_shape') else None
+            layers_info.append((i, layer.name, layer.__class__.__name__, input_shape, output_shape, layer_params))
+
+        for li in layers_info:
+            i, lname, lclass, ishape, oshape, pcount = li
+            self.text_output.insert('end', f"Couche {i}: {lname} ({lclass})\n")
+            self.text_output.insert('end', f" - Input shape: {ishape}\n")
+            self.text_output.insert('end', f" - Output shape: {oshape}\n")
+            self.text_output.insert('end', f" - Paramètres: {pcount}\n\n")
+
+        self.text_output.insert('end', f"Total paramètres du modèle: {total_params}\n")
+
+    def visualize_weights_distribution(self):
+        if not self.ensure_model_loaded():
+            return
+        out_dir = "model_inspector_plots"
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+
+        self.text_output.delete('1.0', tk.END)
+        self.text_output.insert('end', "===== Distribution des Poids =====\n")
+        layer_index = 0
+        for layer in self.model.layers:
+            weights = layer.get_weights()
+            if len(weights) > 0:
+                W = weights[0].flatten()
+                fig, ax = plt.subplots()
+                ax.hist(W, bins=50, color='#2F4F4F', edgecolor='black')  # Couleurs plus sobres
+                ax.set_title(f"Distribution des poids - Couche {layer.name}", color='#000000')
+                ax.set_xlabel("Poids")
+                ax.set_ylabel("Fréquence")
+
+                img_path = os.path.join(out_dir, f"weights_{layer.name}.png")
+                fig.savefig(img_path)
+                plt.close(fig)
+
+                self.text_output.insert('end', f"Couche: {layer.name} - Histogramme sauvegardé: {img_path}\n")
+                layer_index += 1
+
+        if layer_index == 0:
+            self.text_output.insert('end', "Aucune couche avec des poids n'a été trouvée.\n")
+
+    def show_layer_weights(self):
+        if not self.ensure_model_loaded():
+            return
+        self.text_output.delete('1.0', tk.END)
+        self.text_output.insert('end', "===== Poids des Couches =====\n")
+        for i, layer in enumerate(self.model.layers):
+            weights = layer.get_weights()
+            if len(weights) > 0:
+                self.text_output.insert('end', f"Couche {i}: {layer.name}\n")
+                for w_i, w in enumerate(weights):
+                    self.text_output.insert('end', f"Poids #{w_i} shape: {w.shape}\n")
+                    if w.size <= 50:
+                        self.text_output.insert('end', f"{w}\n\n")
+                    else:
+                        self.text_output.insert('end', f"Affichage partiel (taille {w.size}): {w.flatten()[:50]}...\n\n")
+            else:
+                self.text_output.insert('end', f"Couche {i}: {layer.name} - pas de poids.\n\n")
+
+    def save_summary_to_file(self):
+        if not self.ensure_model_loaded():
+            return
+        file_path = filedialog.asksaveasfilename(title="Sauvegarder le résumé",
+                                                 defaultextension=".txt",
+                                                 filetypes=[("Fichier texte", "*.txt")])
+        if not file_path:
+            return
+
+        summary_str = []
+        self.model.summary(print_fn=lambda x: summary_str.append(x))
+        summary_text = "===== Résumé du Modèle =====\n" + "\n".join(summary_str) + "\n\n"
+
+        layers_info = []
+        total_params = 0
+        layers_str = "===== Liste des Couches & Paramètres =====\n"
+        for i, layer in enumerate(self.model.layers):
+            layer_params = layer.count_params()
+            total_params += layer_params
+            input_shape = layer.input_shape if hasattr(layer, 'input_shape') else None
+            output_shape = layer.output_shape if hasattr(layer, 'output_shape') else None
+            layers_info.append((i, layer.name, layer.__class__.__name__, input_shape, output_shape, layer_params))
+
+        for li in layers_info:
+            i, lname, lclass, ishape, oshape, pcount = li
+            layers_str += f"Couche {i}: {lname} ({lclass})\n"
+            layers_str += f" - Input shape: {ishape}\n"
+            layers_str += f" - Output shape: {oshape}\n"
+            layers_str += f" - Paramètres: {pcount}\n\n"
+
+        layers_str += f"Total paramètres du modèle: {total_params}\n"
+
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(summary_text)
+                f.write(layers_str)
+            messagebox.showinfo("Succès", f"Résumé sauvegardé dans : {file_path}")
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Impossible de sauvegarder le résumé:\n{e}")
+
+    def show_compile_info(self):
+        if not self.ensure_model_loaded():
+            return
+        self.text_output.delete('1.0', tk.END)
+        self.text_output.insert('end', "===== Infos de Compilation =====\n")
+        try:
+            optimizer = self.model.optimizer
+            loss = self.model.loss
+            metrics = self.model.metrics_names if self.model.metrics_names else []
+            opt_name = optimizer._name if hasattr(optimizer, '_name') else str(optimizer)
+            self.text_output.insert('end', f"Optimizer: {opt_name}\n")
+            self.text_output.insert('end', f"Loss: {loss}\n")
+            self.text_output.insert('end', f"Metrics: {', '.join(metrics)}\n")
+        except Exception as e:
+            self.text_output.insert('end', f"Impossible de récupérer les infos de compilation.\n{e}\n")
+
+    def show_model_plot(self):
+        if not self.ensure_model_loaded():
+            return
+        file_path = filedialog.asksaveasfilename(title="Enregistrer l'architecture du modèle (image)",
+                                                 defaultextension=".png",
+                                                 filetypes=[("Image PNG", "*.png")])
+        if not file_path:
+            return
+        try:
+            plot_model(self.model, to_file=file_path, show_shapes=True, show_layer_names=True)
+            messagebox.showinfo("Succès", f"Architecture du modèle sauvegardée dans : {file_path}")
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Impossible de générer le graphe du modèle:\n{e}")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.title("Analyseur de Modèle IA (model_inspector) - Professionnel")
+    root.configure(bg=THEME['bg_main'])
+    # Augmenter la taille de la fenêtre
+    root.geometry("1200x800")
+    app = ModelInspectorApp(root)
+    app.pack(fill='both', expand=True)
+    root.mainloop()
 
